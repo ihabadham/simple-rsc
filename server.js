@@ -80,7 +80,7 @@ async function build() {
 					build.onResolve(
 						{ filter: reactComponentRegex },
 						async ({ path: relativePath, resolveDir }) => {
-							const path = resolveApp(resolve(resolveDir, relativePath));
+							const path = resolve(resolveDir, relativePath);
 
 							const contents = await readFile(path, 'utf-8');
 
