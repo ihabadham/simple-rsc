@@ -1,6 +1,8 @@
 import { Suspense } from 'react';
 import { getAll } from '../data/db.js';
+import { getValue } from '../server/state.js';
 import Like from './Like.jsx';
+import ActionButton from './ActionButton.jsx';
 
 async function Albums() {
 	const albums = await getAll();
@@ -20,13 +22,25 @@ async function Albums() {
 	);
 }
 
+function CounterDemo() {
+	const count = getValue('incrementCounter');
+	return (
+		<div className="border-t pt-6 mt-6">
+			<h2 className="text-2xl mb-3">Server Actions Demo (shared across tabs)</h2>
+			<p className="text-xl mb-4">Server value: {count}</p>
+			<ActionButton actionName="incrementCounter">+1</ActionButton>
+		</div>
+	);
+}
+
 export default async function Page() {
 	return (
 		<>
-			<h1 className="text-3xl mb-3">Spotifn’t</h1>
+			<h1 className="text-3xl mb-3">Spotifn&apos;t</h1>
 			<Suspense fallback="Getting albums">
 				<Albums />
 			</Suspense>
+			<CounterDemo />
 		</>
 	);
 }
