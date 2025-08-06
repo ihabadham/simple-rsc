@@ -51,6 +51,30 @@ app.get('/rsc', async (c) => {
 });
 
 /**
+ * Server Action endpoint - executes mutations and streams back fresh RSC payload
+ */
+app.post('/actions/:name', async (c) => {
+	const { name } = c.req.param(); // e.g. "incrementCounter"
+	const body = await c.req.json(); // optional action args
+
+	// Import server state functions
+	const { getValue, setValue } = await import('./server/state.js');
+
+	// 1️⃣ Execute business logic (example: increment a counter)
+	const current = getValue(name, 0);
+	setValue(name, current + 1);
+
+	// 2️⃣ Stream back an updated component tree
+	const Page = await import('./build/page.js');
+	const Comp = createElement(Page.default);
+	const stream = renderToPipeableStream(Comp, '');
+	// @ts-expect-error type of env is 'unknown'
+	stream.pipe(c.env.outgoing);
+
+	return RESPONSE_ALREADY_SENT;
+});
+
+/**
  * Serve your `build/` folder as static assets.
  * Allows you to serve built client components
  * to import from your browser.
@@ -72,6 +96,8 @@ async function build() {
 		outdir: resolveBuild(),
 		// avoid bundling npm packages for server-side components
 		packages: 'external',
+		// keep state module external so server action and page share same instance
+		external: ['../server/state.js'],
 		plugins: [
 			{
 				name: 'resolve-client-imports',
