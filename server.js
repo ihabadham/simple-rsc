@@ -96,6 +96,8 @@ async function build() {
 		outdir: resolveBuild(),
 		// avoid bundling npm packages for server-side components
 		packages: 'external',
+		// keep state module external so server action and page share same instance
+		external: ['../server/state.js'],
 		plugins: [
 			{
 				name: 'resolve-client-imports',
