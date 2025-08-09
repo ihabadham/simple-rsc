@@ -1,12 +1,12 @@
 'use client';
 
 import { startTransition } from 'react';
+import { likeAlbum } from './actions/album.js';
 
 export default function Like({ albumId }) {
 	async function handleLike() {
-		// Phase 1: Manual call to server function via registry
-		// @ts-expect-error window.__callServerFunction is globally available
-		const resp = await window.__callServerFunction('album#likeAlbum', [albumId]);
+		// Call server function and refresh UI with updated state
+		const resp = await likeAlbum(albumId);
 
 		// Re-render with updated server state
 		// @ts-expect-error window.__renderRSC is globally available

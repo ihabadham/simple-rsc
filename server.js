@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { renderToPipeableStream } from 'react-server-dom-esm/server';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { parse } from 'es-module-lexer';
 import { relative, resolve } from 'node:path';
+import { getServerFunction } from './server/server-functions.js';
 
 const app = new Hono();
 
@@ -81,9 +82,6 @@ app.post('/server-fn', async (c) => {
 	try {
 		const { id, args = [] } = await c.req.json();
 
-		// Import server function registry
-		const { getServerFunction } = await import('./server/server-functions.js');
-
 		// Execute the server function
 		const fn = getServerFunction(id);
 		await fn(...args);
@@ -114,18 +112,37 @@ app.use('/build/*', serveStatic());
  */
 async function build() {
 	const clientEntryPoints = new Set();
+	const serverFunctionEntryPoints = new Set();
+
+	// Find all server function modules
+	const actionsDir = resolveApp('actions');
+	try {
+		const actionFiles = await readdir(actionsDir);
+		for (const file of actionFiles) {
+			if (file.endsWith('.js') || file.endsWith('.jsx')) {
+				const filePath = resolve(actionsDir, file);
+				const contents = await readFile(filePath, 'utf8');
+				if (contents.startsWith("'use server'") || contents.startsWith('"use server"')) {
+					serverFunctionEntryPoints.add(filePath);
+				}
+			}
+		}
+	} catch (err) {
+		// No actions directory, that's fine
+	}
 
 	/** Build the server component tree */
 	await esbuild({
 		bundle: true,
 		format: 'esm',
 		logLevel: 'error',
-		entryPoints: [resolveApp('page.jsx')],
+		entryPoints: [resolveApp('page.jsx'), ...serverFunctionEntryPoints],
 		outdir: resolveBuild(),
 		// avoid bundling npm packages for server-side components
 		packages: 'external',
 		// keep state module external so server action and page share same instance
-		external: ['../server/state.js'],
+		// keep server-functions module external so main server and server functions share same registry
+		external: ['../server/state.js', '../../server/state.js', '../../server/server-functions.js'],
 		plugins: [
 			{
 				name: 'resolve-client-imports',
@@ -151,6 +168,39 @@ async function build() {
 						}
 					);
 				}
+			},
+			{
+				name: 'register-server-functions',
+				setup(build) {
+					// Auto-register exports from 'use server' modules
+					build.onLoad({ filter: /\.jsx?$/ }, async ({ path }) => {
+						const source = await readFile(path, 'utf8');
+						if (!source.startsWith("'use server'") && !source.startsWith('"use server"')) {
+							return; // Not a server function module
+						}
+
+						// Parse exports from the server function module
+						const [, exports] = parse(source);
+
+						// Generate registration code for each export
+						const registrations = exports
+							.filter((e) => e.n && e.n !== 'default') // Skip default exports for now
+							.map((e) => {
+								// Create id: relative path from app dir + export name (same as client)
+								const relativePath = relative(resolveApp(), path).replace(/\\/g, '/');
+								const id = `${relativePath}#${e.n}`;
+								return `import { registerServerFunction } from '../../server/server-functions.js';
+registerServerFunction(${JSON.stringify(id)}, ${e.n});`;
+							})
+							.join('\n');
+
+						// Return original source + auto-registration
+						return {
+							contents: source + '\n' + registrations,
+							loader: 'js'
+						};
+					});
+				}
 			}
 		]
 	});
@@ -163,7 +213,61 @@ async function build() {
 		entryPoints: [resolveApp('_client.jsx'), ...clientEntryPoints],
 		outdir: resolveBuild(),
 		splitting: true,
-		write: false
+		write: false,
+		plugins: [
+			{
+				name: 'server-functions-proxy-client',
+				setup(build) {
+					// Intercept imports of 'use server' modules from client code
+					build.onResolve({ filter: /.*/ }, async ({ path: relativePath, resolveDir }) => {
+						// Only handle .js/.jsx imports
+						if (!relativePath.match(/\.jsx?$/)) return;
+
+						const absolutePath = resolve(resolveDir, relativePath);
+
+						try {
+							const source = await readFile(absolutePath, 'utf8');
+							if (source.startsWith("'use server'") || source.startsWith('"use server"')) {
+								// This is a server function module being imported by client code
+								return { path: absolutePath, namespace: 'server-fn-proxy' };
+							}
+						} catch (err) {
+							// File doesn't exist or can't be read, let esbuild handle it
+						}
+						return; // Let esbuild handle normal imports
+					});
+
+					// Generate proxy stubs for server function modules
+					build.onLoad({ filter: /.*/, namespace: 'server-fn-proxy' }, async ({ path }) => {
+						const source = await readFile(path, 'utf8');
+						const [, exports] = parse(source);
+
+						// Generate proxy functions for each export
+						const proxies = exports
+							.filter((e) => e.n && e.n !== 'default') // Skip default exports for now
+							.map((e) => {
+								// Create the same id format as server registration
+								// Use path relative to app dir, not build dir for consistency
+								const relativePath = relative(resolveApp(), path).replace(/\\/g, '/');
+								const id = `${relativePath}#${e.n}`;
+
+								return [
+									`export async function ${e.n}(...args) {`,
+									`  // @ts-expect-error global hook`,
+									`  const resp = await window.__callServerFunction(${JSON.stringify(id)}, args);`,
+									`  return resp;`,
+									`}`,
+									`${e.n}.$$id = ${JSON.stringify(id)};`,
+									`${e.n}.$$typeof = Symbol.for('react.server.reference');`
+								].join('\n');
+							})
+							.join('\n\n');
+
+						return { contents: proxies, loader: 'js' };
+					});
+				}
+			}
+		]
 	});
 
 	outputFiles.forEach(async (file) => {
@@ -194,8 +298,21 @@ ${exp.ln}.$$typeof = Symbol.for("react.client.reference");
 
 serve(app, async (info) => {
 	await build();
-	// Phase 1: Import server functions to register them
-	await import('./app/actions/album.js');
+
+	// Import all built server function modules to register them
+	try {
+		const buildActionsDir = resolveBuild('actions');
+		const actionFiles = await readdir(buildActionsDir);
+		for (const file of actionFiles) {
+			if (file.endsWith('.js')) {
+				const modulePath = `./build/actions/${file}`;
+				await import(modulePath);
+			}
+		}
+	} catch (err) {
+		// No actions directory in build, that's fine
+	}
+
 	console.log(`Listening on http://localhost:${info.port}`);
 });
 
