@@ -75,6 +75,34 @@ app.post('/actions/:name', async (c) => {
 });
 
 /**
+ * Server Functions endpoint - executes server functions and streams back fresh RSC payload
+ */
+app.post('/server-fn', async (c) => {
+	try {
+		const { id, args = [] } = await c.req.json();
+
+		// Import server function registry
+		const { getServerFunction } = await import('./server/server-functions.js');
+
+		// Execute the server function
+		const fn = getServerFunction(id);
+		await fn(...args);
+
+		// Stream back updated component tree (same as existing actions)
+		const Page = await import('./build/page.js');
+		const Comp = createElement(Page.default);
+		const stream = renderToPipeableStream(Comp, '');
+		// @ts-expect-error type of env is 'unknown'
+		stream.pipe(c.env.outgoing);
+
+		return RESPONSE_ALREADY_SENT;
+	} catch (err) {
+		console.error('Server function error:', err);
+		return c.json({ error: err instanceof Error ? err.message : 'Server error' }, 500);
+	}
+});
+
+/**
  * Serve your `build/` folder as static assets.
  * Allows you to serve built client components
  * to import from your browser.
@@ -166,6 +194,8 @@ ${exp.ln}.$$typeof = Symbol.for("react.client.reference");
 
 serve(app, async (info) => {
 	await build();
+	// Phase 1: Import server functions to register them
+	await import('./app/actions/album.js');
 	console.log(`Listening on http://localhost:${info.port}`);
 });
 

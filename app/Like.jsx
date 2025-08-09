@@ -4,11 +4,9 @@ import { startTransition } from 'react';
 
 export default function Like({ albumId }) {
 	async function handleLike() {
-		const resp = await fetch(`/actions/like-${albumId}`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({})
-		});
+		// Phase 1: Manual call to server function via registry
+		// @ts-expect-error window.__callServerFunction is globally available
+		const resp = await window.__callServerFunction('album#likeAlbum', [albumId]);
 
 		// Re-render with updated server state
 		// @ts-expect-error window.__renderRSC is globally available
