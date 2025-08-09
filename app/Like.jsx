@@ -1,14 +1,12 @@
 'use client';
 
 import { startTransition } from 'react';
+import { likeAlbum } from './actions/album.js';
 
 export default function Like({ albumId }) {
 	async function handleLike() {
-		const resp = await fetch(`/actions/like-${albumId}`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({})
-		});
+		// Call server function and refresh UI with updated state
+		const resp = await likeAlbum(albumId);
 
 		// Re-render with updated server state
 		// @ts-expect-error window.__renderRSC is globally available

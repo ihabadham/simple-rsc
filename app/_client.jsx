@@ -16,8 +16,24 @@ function renderRSC(src) {
 	createFromFetch(promise).then((node) => root.render(node));
 }
 
+/**
+ * Call a server function by id and return the RSC response
+ * @param {string} id - Server function id
+ * @param {any[]} args - Arguments to pass to the function
+ */
+async function callServerFunction(id, args) {
+	const resp = await fetch('/server-fn', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ id, args })
+	});
+	return resp; // pass to __renderRSC
+}
+
 // @ts-expect-error adding to window global
 window.__renderRSC = renderRSC; // export for client components
+// @ts-expect-error adding to window global
+window.__callServerFunction = callServerFunction; // export for server function calls
 
 // Initial page load
 renderRSC('/rsc');
